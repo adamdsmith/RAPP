@@ -1,0 +1,121 @@
+---
+output: html_document
+---
+  
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# devtools::install_github("Rdatatable/data.table")
+# devtools::install_github("adamdsmith/geobird")
+# devtools::install_github("bhaskarvk/leaflet@develop")
+# devtools::install_github("bhaskarvk/leaflet.extras")
+pacman::p_load(raster, dplyr, readxl, sp, rgdal, rgeos, geobird, readr,
+               leaflet, leaflet.extras, tidyr, viridis, geojsonio)
+
+# Load and filter RAPP database
+keep_rapp <- c(1.08, 1.20, seq(1.30, 1.43, 0.01), 1.71, 5.41, 5.04, 5.07, 5.47, 6.09, 7.06)
+keep_rapp <- formatC(round(keep_rapp, 2), format='f', digits=2)
+rapp <- read_excel("./Data/Allregionmeasures.xls", skip = 1) %>%
+  dplyr::select(Zone, Complex, Location, RappMeasure, FY, Target, Actual) %>%
+  filter(grepl(paste(keep_rapp, collapse = "|"), RappMeasure))
+
+# A few edits to make compatible
+rapp$Location <- gsub("Dale Bumpers ", "", rapp$Location)
+rapp$Location <- gsub("DArbonne", "D'arbonne", rapp$Location)
+rapp$Location <- gsub("J.N. Ding", "J. N. Ding", rapp$Location)
+rapp$Location <- gsub("ACE Basin", "Ace Basin", rapp$Location)
+```
+
+```{r load_shp, eval = FALSE}
+# Load US counties and refuge polygons
+ref <- readOGR("./GIS", "refuges")
+ref@data <- mutate(ref@data,
+                   ORGNAME = geobird:::Cap(ORGNAME),
+                   Location = gsub("National Wildlife Refuge", "NWR", ORGNAME)) %>%
+  select(Location)
+```
+
+```{r compatability_check, eval = FALSE}
+# Confirm compatability
+refs_rapp <- sort(unique(rapp$Location))
+refs_poly <- sort(unique(ref$Location))
+if (length(refs_rapp[which(!(refs_rapp %in% refs_poly))]) > 0) {
+  cat("KEEP TRYING!\nThis one still doesn't match!\n")
+  refs_rapp[which(!(refs_rapp %in% refs_poly))]
+} else cat("NICE JOB!")
+```
+
+```{r tidy_rapp}
+rapp <- rapp %>% 
+  mutate(Zone = as.integer(gsub("R4 Zone ", "", Zone)),
+         Complex = gsub(" Total| Complex", "", Complex),
+         RAPP = substr(RappMeasure, 1, 4),
+         RAPP_cat = gsub("\\d.\\d\\d[[:space:]]+", "", RappMeasure),
+         Actual = as.numeric(gsub(",", "", Actual))) %>%
+  select(Zone, Complex, Location, RAPP, RAPP_cat, Actual) %>%
+  as.data.frame()
+
+# Look up table for RAPP codes with tidied text
+rapp_lu <- unique(rapp[, c("RAPP", "RAPP_cat")]) %>%
+  mutate(RAPP_cat = gsub("of ", "", RAPP_cat),
+         RAPP_cat = gsub(" for | by ", ": ", RAPP_cat),
+         RAPP_cat = gsub(" or ", "/", RAPP_cat),
+         RAPP_cat = gsub("Number", "#", RAPP_cat),
+         RAPP_cat = gsub("identified ", "", RAPP_cat),
+         RAPP_cat = gsub("non-native, ", "", RAPP_cat))
+
+rapp_wide <- rapp %>%
+  select(Zone, Complex, Location, RAPP, Actual) %>%
+  spread(RAPP, Actual)
+```
+
+```{r geojson_creation, eval = FALSE}
+# Filter shapefile, then join and tidy
+ref <- ref[ref$Location %in% refs_rapp, ]
+ref@data <- left_join(ref@data, rapp_wide, by = "Location") 
+geojson_write(ref, file = "./GIS/refuge_rapp.geojson")
+```
+
+```{r map, fig.height=7, fig.width=10}
+gj <- read_file("./GIS/refuge_rapp.geojson")
+
+# Create map
+p <- leaflet() %>%
+  setView(-80.969436, 30.264745, 5) %>%
+  # Base map 
+  addProviderTiles("CartoDB.DarkMatter") %>%
+  addBootstrapDependency()
+
+for (r in rapp_lu$RAPP[1:10]) {
+  # Set up separate overlays/colors by rapp measure
+  rapp_colors = colorNumeric(palette = viridis(256), domain = rapp_wide[[r]])
+  grp <- rapp_lu[rapp_lu$RAPP == r, "RAPP_cat"]
+  p <- p %>% 
+    addGeoJSONChoropleth(
+      gj,
+      valueProperty = r,
+      opacity = 1, fillOpacity = 1,
+      scale = viridis(8), 
+      mode = "q", steps = 8,
+      labelProperty = c("Location"),
+      popupProperty = propstoHTMLTable(
+        props = c("Zone", "Complex", "Location"),
+        table.attrs = list(class='table table-striped table-bordered'), drop.na = T),
+      color = rapp_colors(rapp_wide[[r]]), 
+      legendOptions = legendOptions(title = grp),
+      group = grp)
+}
+
+p <- p %>% addLayersControl(baseGroups = rapp_lu$RAPP_cat[1:10],
+                       options = layersControlOptions(collapsed = FALSE)) %>%
+  addFullscreenControl()
+
+p
+
+```
+
+
+
+
+
+
+
