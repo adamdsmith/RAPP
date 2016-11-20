@@ -1,9 +1,12 @@
 ---
 output: html_document
 ---
-  
-```{r setup, include = FALSE}
+ 
+```{r knit_opts, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r setup, include = FALSE}
 # devtools::install_github("Rdatatable/data.table")
 # devtools::install_github("adamdsmith/geobird")
 # devtools::install_github("bhaskarvk/leaflet@develop")
@@ -25,23 +28,23 @@ rapp$Location <- gsub("J.N. Ding", "J. N. Ding", rapp$Location)
 rapp$Location <- gsub("ACE Basin", "Ace Basin", rapp$Location)
 ```
 
-```{r load_shp, eval = FALSE}
+```{r load_shp}
 # Load US counties and refuge polygons
-ref <- readOGR("./GIS", "refuges")
+ref <- readOGR("./GIS", "refuges", verbose = FALSE)
 ref@data <- mutate(ref@data,
                    ORGNAME = geobird:::Cap(ORGNAME),
                    Location = gsub("National Wildlife Refuge", "NWR", ORGNAME)) %>%
   select(Location)
 ```
 
-```{r compatability_check, eval = FALSE}
+```{r compatability_check}
 # Confirm compatability
 refs_rapp <- sort(unique(rapp$Location))
 refs_poly <- sort(unique(ref$Location))
-if (length(refs_rapp[which(!(refs_rapp %in% refs_poly))]) > 0) {
-  cat("KEEP TRYING!\nThis one still doesn't match!\n")
-  refs_rapp[which(!(refs_rapp %in% refs_poly))]
-} else cat("NICE JOB!")
+# if (length(refs_rapp[which(!(refs_rapp %in% refs_poly))]) > 0) {
+#   cat("KEEP TRYING!\nThis one still doesn't match!\n")
+#   refs_rapp[which(!(refs_rapp %in% refs_poly))]
+# } else cat("NICE JOB!")
 ```
 
 ```{r tidy_rapp}
@@ -68,47 +71,78 @@ rapp_wide <- rapp %>%
   spread(RAPP, Actual)
 ```
 
-```{r geojson_creation, eval = FALSE}
+```{r geojson_creation}
 # Filter shapefile, then join and tidy
 ref <- ref[ref$Location %in% refs_rapp, ]
 ref@data <- left_join(ref@data, rapp_wide, by = "Location") 
-geojson_write(ref, file = "./GIS/refuge_rapp.geojson")
+# geojson_write(ref, file = "./GIS/refuge_rapp.geojson")
 ```
 
 ```{r map, fig.height=7, fig.width=10}
-gj <- read_file("./GIS/refuge_rapp.geojson")
+#gj <- read_file("./GIS/refuge_rapp.geojson")
+sp_gj <- function(sp_obj){
+  tf <- tempfile(fileext = ".geojson")
+  suppressMessages(geojson_write(sp_obj, file = tf))
+  gs <- read_file(tf)
+  invisible(file.remove(tf))
+  return(gs)
+}
 
 # Create map
 p <- leaflet() %>%
-  setView(-80.969436, 30.264745, 5) %>%
+  setView(-81.375962, 32.248141, 5) %>%
   # Base map 
   addProviderTiles("CartoDB.DarkMatter") %>%
   addBootstrapDependency()
 
-for (r in rapp_lu$RAPP[1:10]) {
+# Find RAPP categories reported by at least 10 refuges
+rapp_lu <- rapp_lu[which(colSums(rapp_wide[, rapp_lu$RAPP] != 0) >= 10), ]
+
+for (r in rapp_lu$RAPP) {
+  
+  d <- ref[ref[[r]] > 0, c("Location", "Zone", "Complex", r)]
+  gj <- sp_gj(d)
+  
+  # if (length(d) > 0) {
+    values <- rapp_wide[[r]][rapp_wide[[r]] > 0]
+  # } else {
+  #   values <- 0
+  # }
+  # n_breaks <- max(n_distinct(fivenum(values)) - 1, 2)
+
   # Set up separate overlays/colors by rapp measure
-  rapp_colors = colorNumeric(palette = viridis(256), domain = rapp_wide[[r]])
+  rapp_colors = colorQuantile(palette = viridis(4), domain = values)
   grp <- rapp_lu[rapp_lu$RAPP == r, "RAPP_cat"]
-  p <- p %>% 
-    addGeoJSONChoropleth(
-      gj,
-      valueProperty = r,
-      opacity = 1, fillOpacity = 1,
-      scale = viridis(8), 
-      mode = "q", steps = 8,
-      labelProperty = c("Location"),
-      popupProperty = propstoHTMLTable(
-        props = c("Zone", "Complex", "Location"),
-        table.attrs = list(class='table table-striped table-bordered'), drop.na = T),
-      color = rapp_colors(rapp_wide[[r]]), 
-      legendOptions = legendOptions(title = grp),
-      group = grp)
+  
+  # if (length(d) > 0) {
+    p <- p %>% 
+      addGeoJSONChoropleth(
+        gj,
+        valueProperty = r,
+        opacity = 1, fillOpacity = 1,
+        scale = viridis(4), 
+        mode = "q", steps = 4,
+        labelProperty = c("Location"),
+        popupProperty = propstoHTMLTable(
+          props = c("Zone", "Complex", "Location"),
+          table.attrs = list(class='table table-striped table-bordered'), drop.na = T),
+        color = rapp_colors(values), weight = 10,
+        legendOptions = legendOptions(title = grp),
+        highlightOptions = highlightOptions(
+          weight=2, color = rapp_colors(values)),
+        group = grp)
+  # } else {
+  #   p <- p %>% 
+  #     addGeoJSONChoropleth(
+  #       gj, 
+  #       valueProperty = r,
+  #       legendOptions = legendOptions(title = grp))
+  # }
 }
 
-p <- p %>% addLayersControl(baseGroups = rapp_lu$RAPP_cat[1:10],
+p <- p %>% addLayersControl(baseGroups = rapp_lu$RAPP_cat,
                        options = layersControlOptions(collapsed = FALSE)) %>%
   addFullscreenControl()
-
 p
 
 ```

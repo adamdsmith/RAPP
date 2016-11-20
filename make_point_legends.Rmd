@@ -1,0 +1,100 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Scenario
+
+We have several measures on each of more than 100 geometries (property boundaries) spread throughout the southeast US.  The objective is to generate an interactive display that facilitates the comparison of these measures among properties at a large scale, from which we hope to get a better feel for the distribution (and potential clumping) of effort that the measures represent.  Each measure is on a separate scale and thus ideally has its own legend.
+
+## Problem
+
+We have polygons and we want to compare properties of those polygons.  Chloropleths seem an ideal solution, particularly give the functionality provided in the [`leaflet.extras`](https://github.com/bhaskarvk/leaflet.extras) package.  However, at the zoom levels required to see all/most of the geometries, many are too small to see.  Possible solutions include either to (1) "deflate" polygon geometries to markers at larger scales (smaller zooms) *a la* [Leaflet.Deflate](https://github.com/oliverroick/Leaflet.Deflate)) or, more simply, ignore the geometry and use markers in place of polygons.
+
+## Chloropleths
+
+Here's an example using `addGeoJSONChoropleth` from `leaflet.extras` that illustrates the problem of small polygon footprints when viewed at a zoom that captures their full spatial extent.
+
+```{r map_polys, fig.height=7, fig.width=10}
+library(leaflet.extras); library(viridis)
+gj <- readr::read_file("https://raw.githubusercontent.com/adamdsmith/RAPP/master/Output/test_polys.geojson?token=ADDDzyDd7aI_X3VlgGNbUk0MOtN2tMgwks5YOwI-wA%3D%3D")
+
+# Base map
+p <- leaflet() %>%
+  setView(-81.287820, 28.291535, 5) %>%
+  # Base map 
+  addProviderTiles("CartoDB.DarkMatter") %>%
+  addBootstrapDependency()
+
+grps <- c("meas1", "meas2")
+
+for (g in grps) {
+
+    p <- p %>% 
+      addGeoJSONChoropleth(
+        gj,
+        valueProperty = g,
+        opacity = 1, fillOpacity = 1,
+        scale = viridis(4), 
+        mode = "q", steps = 4,
+        labelProperty = c("loc"),
+        legendOptions = legendOptions(title = g),
+        highlightOptions = highlightOptions(
+          weight=2, color = "white"),
+        group = g)
+}
+
+p <- p %>% addLayersControl(baseGroups = grps,
+                       options = layersControlOptions(collapsed = FALSE)) %>%
+  addFullscreenControl()
+p
+
+```
+
+## Markers
+
+Alternatively, we can use the centroid of each geometry as the location for a `circleMarker`.  We're not so much interested in the geometry any way, only the spatial distribution of the measurements associated with each...  It seems too complicated to work with variable marker styles/colors when building from a `geoJSON` file, so I convert `geoJSON` to a data frame and use `leaflet::addCircleMarkers` to colormap each measure.  We can get a legend for each group, but they accumulate on the map...  I'm also not sure how to link a given legend to each layer, or retain the highlighting options for that matter. 
+
+```{r map_pts, fig.height=7, fig.width=10}
+library(jsonlite)
+gj <- readr::read_file("https://raw.githubusercontent.com/adamdsmith/RAPP/master/Output/test_pts.geojson?token=ADDDz4KntLAtdvVJIGdVH5fdJzAD1j6Nks5YOwS7wA%3D%3D")
+
+dat <- jsonlite::fromJSON(gj)
+coords <- do.call("rbind", dat$features$geometry$coordinates)
+dat <- data.frame(dat$features$properties, lon = coords[,1], lat = coords[,2])
+
+# Base map
+p <- leaflet() %>%
+  setView(-81.287820, 28.291535, 5) %>%
+  # Base map 
+  addProviderTiles("CartoDB.DarkMatter") %>%
+  addBootstrapDependency()
+
+for (g in grps) {
+
+  pt_colors <- colorQuantile(viridis(4), domain = dat[[g]])
+  points <- pt_colors(dat[[g]])
+    p <- p %>% 
+      addCircleMarkers(data = dat, lng = ~lon, lat = ~lat,
+        weight = 2,
+        label = ~loc,
+        color = points,
+        fillColor = points,
+        opacity = 1, fillOpacity = 1,
+        # highlightOptions = highlightOptions(
+        #   weight=2, color = "white"),
+        group = g) %>%
+      addLegend(position = "bottomleft", title = g, 
+                 pal = pt_colors, values = dat[[g]])
+}
+
+p <- p %>% addLayersControl(baseGroups = grps,
+                       options = layersControlOptions(collapsed = FALSE)) %>%
+  addFullscreenControl()
+p
+
+```
+
