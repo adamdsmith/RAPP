@@ -45,6 +45,9 @@ refs_poly <- sort(unique(ref$Location))
 #   cat("KEEP TRYING!\nThis one still doesn't match!\n")
 #   refs_rapp[which(!(refs_rapp %in% refs_poly))]
 # } else cat("NICE JOB!")
+
+# Filter shapefile
+ref <- ref[ref$Location %in% refs_rapp, ]
 ```
 
 ```{r tidy_rapp}
@@ -68,12 +71,16 @@ rapp_lu <- unique(rapp[, c("RAPP", "RAPP_cat")]) %>%
 
 rapp_wide <- rapp %>%
   select(Zone, Complex, Location, RAPP, Actual) %>%
-  spread(RAPP, Actual)
+  spread(RAPP, Actual) %>%
+  mutate(lat = coordinates(ref)[, 2],
+         lon = coordinates(ref)[, 1])
+
+save(rapp_wide, rapp_lu,
+       file = "./Output/RAPP_tables.rda")
 ```
 
 ```{r geojson_creation}
-# Filter shapefile, then join and tidy
-ref <- ref[ref$Location %in% refs_rapp, ]
+# Join RAPP table to shapefile, then tidy
 ref@data <- left_join(ref@data, rapp_wide, by = "Location") 
 # geojson_write(ref, file = "./GIS/refuge_rapp.geojson")
 ```
